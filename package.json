@@ -1,0 +1,82 @@
+{
+  "name": "dsh-subagent-model-director",
+  "version": "0.2.0",
+  "description": "Smart subagent model assignment for DeepSeek Harness: define model profiles (intelligence, speed, tags) from the globally allowed subagent model list, then let the delegating session pick the best child model per task — fact-checking/research gets fast low-intelligence models, code analysis gets high/mid intelligence at speed, planning/design gets the smartest. Tags match tasks first; complexity breaks ties. Ships a settings page, a dynamic system-prompt section, and a subagent_assign_model helper tool.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/core.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "subagent",
+    "model-selection",
+    "task-routing",
+    "multi-model"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-settings": "^0.1.7-rc.1 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.1.7-rc.1 || ^0.2.0-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.4",
+    "react": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-settings": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-plugin-manager",
+        "@deepseek-ai/dsh-client-ui-renderer"
+      ],
+      "platform": "web"
+    },
+    "engines": {
+      "dsh": ">=0.1.7-rc.1"
+    }
+  },
+  "scripts": {
+    "test": "node test/core.test.mjs && node test/rules-prompt.test.mjs && node test/load.test.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fred-chen/dsh-subagent-model-director.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fred-chen/dsh-subagent-model-director/issues"
+  },
+  "homepage": "https://github.com/fred-chen/dsh-subagent-model-director#readme"
+}

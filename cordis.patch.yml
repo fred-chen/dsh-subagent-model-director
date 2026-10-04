@@ -1,0 +1,13 @@
+# dsh-subagent-model-director — subagent 模型智能分派
+# 注册宿主插件行（设置页、提示词注入、subagent_assign_model 工具都在这一行里）。
+# 模型档案的 provider/model 只能从宿主 subagent 全局允许列表
+# （设置 → 插件 → Subagent → Model selection，即 subagent-model-selection-settings 条目）中选择。
+- insert:
+    - id: subagent-model-director
+      name: dsh-subagent-model-director
+      config:
+        enabled: true
+        guidanceMode: compact
+        requireTagMatch: false
+        profiles: []
+        rules: []
