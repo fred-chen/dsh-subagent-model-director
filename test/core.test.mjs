@@ -1,4 +1,11 @@
-import { assignTasks, normalizeConfig, normalizeProfiles, normalizeSelectionState } from "../lib/core.js";
+import {
+  ASSIGN_TOOL_OUTPUT_SCHEMA,
+  ASSIGN_TOOL_PARAMETERS,
+  assignTasks,
+  normalizeConfig,
+  normalizeProfiles,
+  normalizeSelectionState,
+} from "../lib/core.js";
 
 const allowed = normalizeSelectionState({ enabled: true, allowedModels: [
   { provider: "ai395", model: "Qwen3.8-27B" },
@@ -97,6 +104,56 @@ console.log("6. 阵列内最大 30 个任务");
   const r = assignTasks({ config: cfg, allowed, tasks });
   check("只接受前 30 个", r.totalTasks === 30);
   check("30 个任务 → 并发 50 的模型全收，无溢出", r.overflowed === 0 && r.assignments.length === 30);
+}
+
+console.log("7. 工具 schema 守卫（宿主 value-schema DSL 兼容性）");
+{
+  // 宿主 dsh-tools 的 DSL：object 节点只允许 type/properties/additionalProperties(+注解)，
+  // required 数组一律不支持（参数只能用每属性 required: true 布尔）。
+  // 违反即 defineTool 注册时抛错且被 effect 吞掉 → 工具静默消失（v0.3.0 事故）。
+  const VALUE_KEYS = ["type", "properties", "items", "additionalProperties", "description", "title", "default", "examples", "enum", "const", "oneOf"];
+  const walk = (node, pathName, isParam) => {
+    for (const key of Object.keys(node)) {
+      if (VALUE_KEYS.includes(key)) continue;
+      if (key === "required" && isParam && node.required === true) continue;
+      throw new Error(`${pathName}.${key} 不被宿主 value-schema DSL 支持`);
+    }
+    if (node.type === "object") {
+      if (typeof node.additionalProperties !== "boolean") throw new Error(`${pathName}: object 节点必须显式声明 additionalProperties`);
+      for (const [k, v] of Object.entries(node.properties ?? {})) walk(v, `${pathName}.${k}`, isParam);
+    }
+    if (node.type === "array") walk(node.items, `${pathName}.items`, isParam);
+  };
+  try {
+    for (const [k, v] of Object.entries(ASSIGN_TOOL_PARAMETERS)) walk(v, `parameters.${k}`, true);
+    walk(ASSIGN_TOOL_OUTPUT_SCHEMA, "output", false);
+    check("schema 全部关键字在 DSL 允许范围内", true);
+  } catch (error) {
+    check("schema 全部关键字在 DSL 允许范围内", false, error.message);
+  }
+  let hasRequired = false;
+  const findRequired = (node) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(findRequired); return; }
+    if ("required" in node) hasRequired = true;
+    Object.values(node).forEach(findRequired);
+  };
+  findRequired(ASSIGN_TOOL_OUTPUT_SCHEMA);
+  check("output schema 无 required（v0.3.0 事故回归守卫）", !hasRequired);
+}
+
+console.log("8. reasoning effort 大小写归一化");
+{
+  const profiles = normalizeProfiles([
+    { id: "a", displayName: "A", provider: "ai395", model: "M1", reasoningEffort: "Max" },
+    { id: "b", displayName: "B", provider: "ai395", model: "M2", reasoningEffort: "XHIGH" },
+    { id: "c", displayName: "C", provider: "ai395", model: "M3", reasoningEffort: "custom-thing" },
+    { id: "d", displayName: "D", provider: "ai395", model: "M4", reasoningEffort: "  " },
+  ]);
+  check("Max → max（宿主适配器大小写敏感）", profiles[0].reasoningEffort === "max", profiles[0].reasoningEffort);
+  check("XHIGH → xhigh", profiles[1].reasoningEffort === "xhigh");
+  check("未知自定义值原样保留", profiles[2].reasoningEffort === "custom-thing");
+  check("空白 → 空串（不指定）", profiles[3].reasoningEffort === "");
 }
 
 console.log(`\n结果：${pass} 通过，${fail} 失败`);

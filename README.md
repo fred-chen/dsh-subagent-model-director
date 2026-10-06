@@ -64,7 +64,7 @@ pnpm add github:fred-chen/dsh-subagent-model-director
 - 卸载：插件页删除该 bundle，或 `pnpm remove dsh-subagent-model-director`（profile 目录内）；
 - 更新：`pnpm add github:fred-chen/dsh-subagent-model-director#main` 后重启；发布 npm 后可直接 `pnpm add dsh-subagent-model-director@latest`。
 
-## 分派模型（v0.3.0）
+## 分派模型（v0.3.1）
 
 模型**只按智能程度分级**（高 / 中 / 低），每个模型声明**并发数**（可同时运行的任务数）：
 
@@ -111,6 +111,7 @@ pnpm add github:fred-chen/dsh-subagent-model-director
 
 - `subagent_fork` 不能选择子模型路由（继承父会话以复用 KV 前缀），分派只对 `subagent`（spawn 等支持 `agentOptions` 的后端）生效。
 - 全局允许列表变更后，失配档案会在设置页标黄并在运行时跳过。
+- 档案的 reasoning effort 会自动归一化为小写（如 `Max` → `max`）：宿主各模型适配器对 effort 的校验是大小写敏感的。
 - 提示词段落是动态的：修改配置会改变父会话请求前缀（与 free-search 等动态段落同样的权衡）。
 
 ## 开发
