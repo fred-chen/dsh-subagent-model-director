@@ -1,4 +1,4 @@
-import { assignProfile, buildPromptSection, normalizeConfig, normalizeSelectionState, normalizeLoad } from "../lib/core.js";
+import { assignTasks, normalizeConfig, normalizeSelectionState, normalizeLoad } from "../lib/core.js";
 
 const allowed = normalizeSelectionState({ enabled: true, allowedModels: [
   { provider: "ai395", model: "Qwen3.8-27B" },
@@ -6,120 +6,65 @@ const allowed = normalizeSelectionState({ enabled: true, allowedModels: [
   { provider: "ai4090", model: "GLM-5.3-Flash" },
 ]});
 
-// 模拟用户当前配置：架构师与程序員共享代码类 tag（用户已加回）
-const baseProfiles = [
-  { id: "p1", displayName: "调查员", provider: "ai395", model: "Qwen3.8-27B", reasoningEffort: "xhigh", intelligence: "low", speed: "high", tags: ["调查","事实核查","工具调用","简单任务"] },
-  { id: "p2", displayName: "架构师", provider: "ai4090", model: "GLM-5.3-Flash", reasoningEffort: "Max", intelligence: "high", speed: "high", tags: ["写作","架构设计","计划","代码分析","代码编写","troubleshooting"] },
-  { id: "p3", displayName: "程序員", provider: "ai395", model: "Qwen3.8-Flash-Next", reasoningEffort: "xhigh", intelligence: "medium", speed: "medium", tags: ["代码分析","代码编写","troubleshooting"] },
-];
-const mkCfg = (over = {}) => normalizeConfig({ profiles: baseProfiles, ...over });
+const mkCfg = (profiles) => normalizeConfig({ profiles });
+const P = (id, name, provider, model, intelligence, concurrency = 1, extra = {}) =>
+  ({ id, displayName: name, provider, model, intelligence, concurrency, enabled: true, ...extra });
+const ARCH = (n = 1, extra = {}) => P("arch", "架构师", "ai4090", "GLM-5.3-Flash", "high", n, extra);
+const DEV = (n = 1, extra = {}) => P("dev", "程序員", "ai395", "Qwen3.8-Flash-Next", "medium", n, extra);
+const RES = (n = 1, extra = {}) => P("res", "调查员", "ai395", "Qwen3.8-27B", "low", n, extra);
+const T = (s, c) => ({ task_summary: s, complexity: c });
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail) => { cond ? pass++ : fail++; console.log(`  ${cond ? "✓" : "✗"} ${name}${!cond && detail ? " — " + detail : ""}`); };
-const pick = (cfg, load, tags, intel = "high", speed = "high") =>
-  assignProfile({ config: cfg, allowed, load, tags, intelligence: intel, speed, taskText: "任务" });
 
-console.log("1. 共享 tag 下的轮换（balanced，架构师88 vs 程序員72）");
+console.log("1. 并发数限制：满则顺延");
 {
-  const cfg = mkCfg();
-  const seq = [];
-  const counts = {};
-  for (let i = 0; i < 4; i++) {
-    const r = pick(cfg, counts, ["代码分析"]);
-    seq.push(r.profileId);
-    counts[`${r.route.provider}/${r.route.model}`] = (counts[`${r.route.provider}/${r.route.model}`] ?? 0) + 1;
-  }
-  console.log("    序列:", seq.join(" → "), "计数:", JSON.stringify(counts));
-  check("首 selects 架构师（高分优先）", seq[0] === "p2", seq[0]);
-  check("第2次轮换到程序員", seq[1] === "p3", seq[1]);
-  check("第3次回到架构师", seq[2] === "p2", seq[2]);
-  check("第4次轮换到程序員", seq[3] === "p3", seq[3]);
-  check("两档案被平分（2:2）", counts["ai4090/GLM-5.3-Flash"] === 2 && counts["ai395/Qwen3.8-Flash-Next"] === 2);
+  const cfg = mkCfg([ARCH(1), DEV(2)]);
+  const r = assignTasks({ config: cfg, allowed, tasks: [T("高A", "high"), T("高B", "high"), T("高C", "high")] });
+  const routes = r.assignments.map((a) => a.profileId);
+  check("高级并发 1 → 只接 1 个", routes.filter((x) => x === "arch").length === 1);
+  check("其余顺延中档（并发2全收）", routes.filter((x) => x === "dev").length === 2);
+  check("无溢出", r.overflowed === 0);
 }
 
-console.log("2. off 模式：永远选最高分档案");
+console.log("2. 超过总并发 → 溢出按难度+并发份额");
 {
-  const cfg = mkCfg({ loadBalancing: "off" });
-  const r = pick(cfg, { "ai4090/GLM-5.3-Flash": 5 }, ["代码分析"]);
-  check("高负载也不轮换", r.profileId === "p2", r.profileId);
-}
-
-console.log("3. strict 模式：更快轮换");
-{
-  const cfg = mkCfg({ loadBalancing: "strict" });
-  // 基础分差 16（88 vs 72）：balanced 时架构师 1 个任务后仍领先（88-25=63 < 72? 不，63<72 → 轮换）
-  // 用 base 差更大的场景区分：调查员(低智能) vs 程序員，代码任务下都不命中 tag… 改用：
-  // 架构师(88) vs 程序員(72)，负载 {架构师:1}：balanced → 63 vs 72 → 程序員；strict → 28 vs 72 → 程序員。相同。
-  // 区分场景：负载 {程序員:1}，无负载架构师：balanced → 88 vs 47 → 架构师；strict → 88 vs 12 → 架构师。也相同。
-  // 区分点：base 差 ~40 的对：A=88(负载1) vs B=48(负载0)：balanced → 63 vs 48 → A；strict → 28 vs 48 → B。
-  // A=88（tag+智能+速度全中），B=48（无 tag 但智能/速度全匹配）→ base 差 40，都在胜任集合内
-  const cfg2 = normalizeConfig({ loadBalancing: "strict", profiles: [
-    { id: "A", displayName: "A", provider: "ai4090", model: "GLM-5.3-Flash", intelligence: "high", speed: "high", tags: ["代码分析"] },
-    { id: "B", displayName: "B", provider: "ai395", model: "Qwen3.8-Flash-Next", intelligence: "high", speed: "high", tags: [] },
+  const cfg = mkCfg([ARCH(1), DEV(1), RES(1)]);
+  const r = assignTasks({ config: cfg, allowed, tasks: [
+    T("难1", "high"), T("难2", "high"), T("中1", "medium"), T("中2", "medium"), T("简1", "low"),
   ]});
-  const rStrict = pick(cfg2, { "ai4090/GLM-5.3-Flash": 1 }, ["代码分析"]);
-  check("strict：A 1个任务后让位（28 vs 48）", rStrict.profileId === "B", rStrict.profileId);
-  const cfg3 = normalizeConfig({ loadBalancing: "balanced", profiles: cfg2.profiles });
-  const rBal = pick(cfg3, { "ai4090/GLM-5.3-Flash": 1 }, ["代码分析"]);
-  check("balanced：同样负载下 A 仍胜（63 vs 48）", rBal.profileId === "A", rBal.profileId);
+  check("溢出 2 个", r.overflowed === 2, r.overflowed);
+  const bySum = (s) => r.assignments.find((a) => a.taskSummary === s);
+  check("难1→高级", bySum("难1")?.profileId === "arch");
+  check("难2→中/低（高级满后顺延，恰好是 dev）", bySum("难2")?.profileId === "dev", bySum("难2")?.profileId);
+  check("溢出任务全部落位", r.assignments.length === 5);
+  check("负载表覆盖三档", r.loadTable.length === 3);
+  // 每档各接 1，另外 2 个溢出按难度就近（中1/中2 → 高/低 的并发份额相对最低者）
+  check("总并发 3，任务 5，分配正确计数", r.loadTable.reduce((s, e) => s + e.active, 0) === 5);
 }
 
-console.log("4. 胜任集合边界：弱档案不因空闲胜出");
+console.log("3. 既有负载参与判断（工具记账点）");
 {
-  const cfg = normalizeConfig({ profiles: [
-    { id: "A", displayName: "A", provider: "ai4090", model: "GLM-5.3-Flash", intelligence: "high", speed: "high", tags: ["代码分析"] },
-    { id: "C", displayName: "C", provider: "ai395", model: "Qwen3.8-27B", intelligence: "low", speed: "low", tags: [] },
-  ]});
-  // A=88（tag+智能+速度全中），C≈30（差 58 > band 45，不在胜任集合）
-  const r = pick(cfg, { "ai4090/GLM-5.3-Flash": 10 }, ["代码分析"]);
-  check("A 负载 10 仍胜出（C 不在胜任集合）", r.profileId === "A", r.profileId);
+  const cfg = mkCfg([ARCH(1), DEV(1)]);
+  // arch 已有 1 个进行中任务（来自之前的工具推荐）→ 新任务直接顺延 dev
+  const r = assignTasks({ config: cfg, allowed, load: { "ai4090/GLM-5.3-Flash": 1 }, tasks: [T("新任务", "medium")] });
+  check("arch 满载 → 新任务去 dev", r.assignments[0].profileId === "dev", r.assignments[0].profileId);
 }
 
-console.log("5. 规则 > 负载：强信号不被均衡推翻");
+console.log("4. 负载归一化");
 {
-  const cfg = normalizeConfig({ profiles: baseProfiles, rules: [
-    { id: "r1", keywords: ["源码核验"], profileId: "p3", priority: 200, enabled: true },
-  ]});
-  const r = assignProfile({ config: cfg, allowed, load: { "ai395/Qwen3.8-Flash-Next": 3 }, tags: [], intelligence: "high", speed: "high", taskText: "源码核验两引擎事实" });
-  check("规则命中档案负载 3 仍胜出", r.profileId === "p3", r.profileId);
-}
-
-console.log("6. normalizeLoad 清洗");
-{
-  const clean = normalizeLoad({ "a/b": 2.7, "c/d": -1, "e/f": 0, "g/h": "3", bad: 1 });
+  const clean = normalizeLoad({ "a/b": 2.7, "c/d": -1, "e/f": 0, "g/h": "3", one: 1 });
   check("浮点取整", clean["a/b"] === 2);
   check("负数丢弃", !("c/d" in clean));
   check("零丢弃", !("e/f" in clean));
-  check("字符串数字丢弃（只接受 number）", !("g/h" in clean));
-  check("合法数字键保留（键为不透明路由串）", clean["bad"] === 1);
+  check("字符串丢弃（只接受 number）", !("g/h" in clean));
+  check("合法数字保留", clean["one"] === 1);
 }
 
-console.log("7. 提示词策略行");
+console.log("5. 并发数上限钳制");
 {
-  const on = buildPromptSection({ config: mkCfg(), allowed });
-  check("balanced 模式有策略行", on.includes("Load balancing (balanced) is on"));
-  const strict = buildPromptSection({ config: mkCfg({ loadBalancing: "strict" }), allowed });
-  check("strict 模式有专属措辞", strict.includes("Load balancing (strict) is on"));
-  const off = buildPromptSection({ config: mkCfg({ loadBalancing: "off" }), allowed });
-  check("off 模式无策略行", !off.includes("Load balancing"));
-}
-
-console.log("8. 结果结构：alternatives 带负载、理由带均衡说明");
-{
-  const cfg = mkCfg();
-  const r = pick(cfg, { "ai4090/GLM-5.3-Flash": 1 }, ["代码分析"]);
-  check("让位理由生成", r.reasons.some(x => x.includes("负载均衡") && x.includes("让位")), r.reasons.join("|"));
-  check("alternatives 带 load 字段", r.alternatives.every(a => Number.isFinite(a.load)));
-  check("loadTable 覆盖胜任集合", r.loadTable.length >= 2 && r.loadTable.every(e => Number.isFinite(e.load)));
-  check("loadBalancing 模式回传", r.loadBalancing === "balanced");
-}
-
-console.log("9. 空负载回归：与均衡关闭时选择一致");
-{
-  const cfg = mkCfg();
-  const r = pick(cfg, {}, ["代码分析"]);
-  check("无计数时选最高分档案", r.profileId === "p2", r.profileId);
-  check("无计数时不产生均衡理由", !r.reasons.some(x => x.includes("负载均衡")));
+  const cfg = normalizeConfig({ profiles: [P("a", "A", "ai395", "Qwen3.8-27B", "high", 9999)] });
+  check("大于 50 → 50", cfg.profiles[0].concurrency === 50);
 }
 
 console.log(`\n结果：${pass} 通过，${fail} 失败`);

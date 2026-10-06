@@ -1,131 +1,102 @@
-import { assignProfile, buildPromptSection, normalizeConfig, normalizeSelectionState, staleProfileIds } from "../lib/core.js";
+import { assignTasks, normalizeConfig, normalizeProfiles, normalizeSelectionState } from "../lib/core.js";
 
-// 与用户环境一致的模拟数据
-const allowed = normalizeSelectionState({
-  enabled: true,
-  allowedModels: [
-    { provider: "ai395", model: "Qwen3.8-27B" },
-    { provider: "ai395", model: "Qwen3.8-Flash-Next" },
-    { provider: "ai4090", model: "GLM-5.3-Flash" },
-  ],
-});
+const allowed = normalizeSelectionState({ enabled: true, allowedModels: [
+  { provider: "ai395", model: "Qwen3.8-27B" },
+  { provider: "ai395", model: "Qwen3.8-Flash-Next" },
+  { provider: "ai4090", model: "GLM-5.3-Flash" },
+]});
 
-const config = normalizeConfig({
-  enabled: true,
-  guidanceMode: "compact",
-  requireTagMatch: false,
-  profiles: [
-    { id: "p-fast", displayName: "极速调研员", provider: "ai395", model: "Qwen3.8-Flash-Next", reasoningEffort: "low", intelligence: "low", speed: "high", tags: ["调研", "事实核查"] },
-    { id: "p-code", displayName: "代码审查员", provider: "ai395", model: "Qwen3.8-27B", reasoningEffort: "xhigh", intelligence: "high", speed: "medium", tags: ["代码审查", "代码分析"] },
-    { id: "p-writer", displayName: "写作专家", provider: "ai4090", model: "GLM-5.3-Flash", reasoningEffort: "max", intelligence: "high", speed: "low", tags: ["写作"] },
-    { id: "p-planner", displayName: "首席规划师", provider: "ai4090", model: "GLM-5.3-Flash", reasoningEffort: "max", intelligence: "high", speed: "low", tags: ["计划", "设计"] },
-    // 故意放一个不在允许列表里的档案
-    { id: "p-ghost", displayName: "幽灵模型", provider: "ai999", model: "Ghost-Model", intelligence: "high", speed: "high", tags: ["调研"] },
-  ],
-  rules: [{ id: "r-sec", keywords: ["安全审计", "漏洞"], profileId: "p-code", priority: 200, enabled: true }],
-});
+const mkCfg = (profiles, extra = {}) => normalizeConfig({ profiles, ...extra });
+const simpleProfile = (id, name, provider, model, intelligence, concurrency = 1, extra = {}) =>
+  ({ id, displayName: name, provider, model, intelligence, concurrency, enabled: true, ...extra });
+
+// 常见三档模型
+const ARCH = simpleProfile("arch", "架构师", "ai4090", "GLM-5.3-Flash", "high", 1, { reasoningEffort: "Max" });
+const DEV = simpleProfile("dev", "程序員", "ai395", "Qwen3.8-Flash-Next", "medium", 1, { reasoningEffort: "xhigh" });
+const RES = simpleProfile("res", "调查员", "ai395", "Qwen3.8-27B", "low", 1, { reasoningEffort: "xhigh" });
 
 let pass = 0, fail = 0;
-function check(name, cond, detail) {
-  if (cond) { pass++; console.log(`  ✓ ${name}`); }
-  else { fail++; console.log(`  ✗ ${name}${detail ? " — " + detail : ""}`); }
-}
+const check = (name, cond, detail) => { cond ? pass++ : fail++; console.log(`  ${cond ? "✓" : "✗"} ${name}${!cond && detail ? " — " + detail : ""}`); };
+const one = (cfg, task, load) =>
+  assignTasks({ config: cfg, allowed, load, tasks: [{ task_summary: task }] });
 
-console.log("场景 1：硬核事实核查（低智能+高速度）");
+console.log("1. 归一化");
 {
-  const r = assignProfile({ config, allowed, taskText: "检索并核实 vLLM 0.9 的 tensor parallel 支持情况，大量网页阅读", intelligence: "low", speed: "high" });
-  check("分派成功", r.ok);
-  check("选中极速调研员（低智能高速度胜出）", r.profileId === "p-fast", `实际 ${r.profileId}`);
-  check("理由包含智能匹配", r.reasons.some(x => x.includes("智能")));
-}
-
-console.log("场景 2：代码审查（高智能+中速度）");
-{
-  const r = assignProfile({ config, allowed, taskText: "审查 PR #42 的错误处理与边界条件，推断潜在竞态", intelligence: "high", speed: "medium" });
-  check("选中代码审查员", r.profileId === "p-code", `实际 ${r.profileId}`);
-}
-
-console.log("场景 3：计划设计（最高智能）");
-{
-  const r = assignProfile({ config, allowed, taskText: "设计多租户插件沙箱架构，结合已核查事实做创造性方案", intelligence: "high", speed: "low" });
-  check("选中首席规划师", r.profileId === "p-planner", `实际 ${r.profileId}`);
-}
-
-console.log("场景 4：标签匹配 —— 写作任务");
-{
-  const r = assignProfile({ config, allowed, taskText: "把这份 API 文档润色成面向开发者的教程", tags: ["写作"], intelligence: "medium", speed: "medium" });
-  check("选中写作专家（标签命中）", r.profileId === "p-writer", `实际 ${r.profileId}`);
-  check("理由包含标签命中", r.reasons.some(x => x.includes("标签命中")));
-}
-
-console.log("场景 5：多模型同 tag → 复杂度择优");
-{
-  // 两个档案都带“调研”标签：p-fast（低智能）与 p-ghost（高智能，但路由不合法应被排除）
-  const cfg2 = normalizeConfig({
+  const cfg = normalizeConfig({
     profiles: [
-      { id: "a", displayName: "A", provider: "ai395", model: "Qwen3.8-Flash-Next", intelligence: "low", speed: "high", tags: ["调研"] },
-      { id: "b", displayName: "B", provider: "ai395", model: "Qwen3.8-27B", intelligence: "high", speed: "low", tags: ["调研"] },
+      { id: "a", displayName: "A", provider: "ai395", model: "Qwen3.8-27B", intelligence: "high", concurrency: 2.7, speed: "high", tags: ["x"] },
+      { id: "b", displayName: "B", provider: "ai395", model: "Qwen3.8-Flash-Next", intelligence: "medium", concurrency: 0, loadBalancing: "strict" },
+      { id: "c", provider: "ai395", model: "Qwen3.8-27B", intelligence: "low", concurrency: -3 },
+      { id: "d", provider: "", model: "x" }, // 路由不完整
     ],
-  });
-  const r = assignProfile({ config: cfg2, allowed, taskText: "深入调研并推理架构风险", tags: ["调研"], intelligence: "high", speed: "low" });
-  check("同标签时按复杂度选中 B（高智能）", r.profileId === "b", `实际 ${r.profileId}`);
-  const r2 = assignProfile({ config: cfg2, allowed, taskText: "快速核查版本号", tags: ["调研"], intelligence: "low", speed: "high" });
-  check("同标签低复杂度选中 A", r2.profileId === "a", `实际 ${r2.profileId}`);
-}
-
-console.log("场景 6：规则关键词强加权");
-{
-  const r = assignProfile({ config, allowed, taskText: "对 auth 模块做安全审计，找漏洞", intelligence: "medium", speed: "high" });
-  check("安全审计命中规则 → 代码审查员", r.profileId === "p-code", `实际 ${r.profileId}`);
-  check("理由包含规则命中", r.reasons.some(x => x.includes("规则命中")));
-}
-
-console.log("场景 7：不允许列表校验");
-{
-  check("幽灵模型被判为 stale", staleProfileIds(config.profiles, allowed.routes).includes("p-ghost"));
-  const r = assignProfile({ config, allowed, taskText: "测试幽灵", tags: ["调研"], intelligence: "high", speed: "high" });
-  check("幽灵模型不参与分派", r.profileId !== "p-ghost");
-}
-
-console.log("场景 8：requireTagMatch 门控");
-{
-  const cfg3 = normalizeConfig({
     requireTagMatch: true,
-    profiles: [
-      { id: "tagged", displayName: "有标签", provider: "ai395", model: "Qwen3.8-27B", tags: ["调研"] },
-      { id: "plain", displayName: "无标签", provider: "ai395", model: "Qwen3.8-Flash-Next" },
-    ],
+    defaultProfileId: "zzz",
   });
-  const r = assignProfile({ config: cfg3, allowed, taskText: "写作相关任务", tags: ["写作"], intelligence: "medium", speed: "medium" });
-  check("无命中时回退到最接近档案而非报错", r.ok && r.profileId === "plain", `实际 ${r.profileId}`);
-  const cfg4 = normalizeConfig({
-    requireTagMatch: true,
-    profiles: [
-      { id: "tagged", displayName: "有标签", provider: "ai395", model: "Qwen3.8-27B", tags: ["调研"] },
-      { id: "plain", displayName: "无标签", provider: "ai395", model: "Qwen3.8-Flash-Next" },
-    ],
-  });
-  const r2 = assignProfile({ config: cfg4, allowed, taskText: "调研任务", tags: ["调研"], intelligence: "medium", speed: "medium" });
-  check("有命中时门控到命中档案", r2.profileId === "tagged", `实际 ${r2.profileId}`);
+  check("并发 2.7 → 2", cfg.profiles[0].concurrency === 2);
+  check("并发 0 → 1", cfg.profiles[1].concurrency === 1);
+  check("并发 -3 → 1", cfg.profiles[2].concurrency === 1);
+  check("路由不完整丢弃", cfg.profiles.length === 3);
+  check("旧字段清理：无 speed/tags/loadBalancing", cfg.profiles.every((p) => !("speed" in p) && !("tags" in p) && !("loadBalancing" in p)));
+  check("旧顶层字段清理", !("requireTagMatch" in cfg) && !("defaultProfileId" in cfg));
 }
 
-console.log("场景 9：提示词段落");
+console.log("2. 任务默认交给仍有空位的最高级模型");
 {
-  const section = buildPromptSection({ config, allowed });
-  check("段落生成", typeof section === "string" && section.length > 100);
-  check("包含允许列表", section.includes("ai395/Qwen3.8-27B"));
-  check("包含档案表", section.includes("极速调研员"));
-  check("包含分派标准", section.includes("事实核查"));
-  const off = buildPromptSection({ config: { ...config, guidanceMode: "off" }, allowed });
-  check("off 模式不注入", off === null);
+  const cfg = mkCfg([ARCH, DEV, RES]);
+  const r = one(cfg, "设计多租户沙箱架构（高）");
+  check("单任务 → 最高级（架构师）", r.ok && r.assignments[0].profileId === "arch", JSON.stringify(r.assignments?.[0]));
+  // 复杂度缺省 medium 也能安排
+  const r2 = one(cfg, "随便一个任务");
+  check("缺省复杂度的任务也默认给最高级", r2.assignments[0].profileId === "arch");
 }
 
-console.log("场景 10：空配置与禁用");
+console.log("3. 批量并行：难的先占高级算力");
 {
-  const r = assignProfile({ config: { profiles: [] }, allowed, taskText: "x" });
-  check("无档案给出明确错误", !r.ok && r.code === "no-profiles");
-  const r2 = assignProfile({ config: { ...config, enabled: false }, allowed, taskText: "x" });
-  check("禁用返回 disabled", !r2.ok && r2.code === "disabled");
+  const ARCH1 = simpleProfile("arch", "架构师", "ai4090", "GLM-5.3-Flash", "high", 1);
+  const cfg = mkCfg([ARCH1, DEV, RES]);
+  const r = assignTasks({ config: cfg, allowed, tasks: [
+    { task_summary: "简单检索", complexity: "low" },
+    { task_summary: "困难设计", complexity: "high" },
+  ]});
+  const bySummary = (s) => r.assignments.find((a) => a.taskSummary === s);
+  check("难任务 → 高级", bySummary("困难设计")?.profileId === "arch");
+  // 级联规则：高级满后顺延到"下一级"（中档），批量大时简单任务才会压到底部
+  check("简单任务 → 顺延下一级（中档 dev）", bySummary("简单检索")?.profileId === "dev", bySummary("简单检索")?.profileId);
+}
+
+console.log("4. 满载顺延下一级");
+{
+  const ARCH1 = simpleProfile("arch", "架构师", "ai4090", "GLM-5.3-Flash", "high", 1);
+  const cfg = mkCfg([ARCH1, DEV, RES]);
+  const r = assignTasks({ config: cfg, allowed, tasks: [
+    { task_summary: "设计 A", complexity: "high" },
+    { task_summary: "设计 B", complexity: "high" },
+  ]});
+  check("第二个硬任务顺延到中/低", r.assignments[1].profileId !== "arch");
+  check("并发计数正确", r.loadTable.find((e) => e.route === "ai4090/GLM-5.3-Flash")?.active === 1);
+}
+
+console.log("5. 错误路径");
+{
+  check("无档案 → no-profiles", !one(normalizeConfig({}), "x").ok && one(normalizeConfig({}), "x").code === "no-profiles");
+  check("禁用 → disabled", !one(normalizeConfig({ enabled: false, profiles: [{ id: "a", displayName: "A", provider: "ai395", model: "Qwen3.8-27B", intelligence: "high" }] }), "x").ok);
+  const cfg = mkCfg([ARCH, DEV, RES]);
+  const empty = assignTasks({ config: cfg, allowed, tasks: [] });
+  check("空任务 → no-tasks", !empty.ok && empty.code === "no-tasks");
+  const ghostCfg = mkCfg([
+    { id: "g1", displayName: "G1", provider: "ai999", model: "Ghost-1", intelligence: "high" },
+  ]);
+  const noEligible = assignTasks({ config: ghostCfg, allowed, tasks: [{ task_summary: "x" }] });
+  check("有档案但路由全失配 → no-eligible-profiles", !noEligible.ok && noEligible.code === "no-eligible-profiles");
+}
+
+console.log("6. 阵列内最大 30 个任务");
+{
+  const cfg = mkCfg([{ ...ARCH, concurrency: 50 }]);
+  const tasks = Array.from({ length: 40 }, (_, i) => ({ task_summary: `任务${i}`, complexity: "low" }));
+  const r = assignTasks({ config: cfg, allowed, tasks });
+  check("只接受前 30 个", r.totalTasks === 30);
+  check("30 个任务 → 并发 50 的模型全收，无溢出", r.overflowed === 0 && r.assignments.length === 30);
 }
 
 console.log(`\n结果：${pass} 通过，${fail} 失败`);
