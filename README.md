@@ -64,7 +64,7 @@ pnpm add github:fred-chen/dsh-subagent-model-director
 - 卸载：插件页删除该 bundle，或 `pnpm remove dsh-subagent-model-director`（profile 目录内）；
 - 更新：`pnpm add github:fred-chen/dsh-subagent-model-director#main` 后重启；发布 npm 后可直接 `pnpm add dsh-subagent-model-director@latest`。
 
-## 分派模型（v0.3.1）
+## 分派模型（v0.3.2）
 
 模型**只按智能程度分级**（高 / 中 / 低），每个模型声明**并发数**（可同时运行的任务数）：
 

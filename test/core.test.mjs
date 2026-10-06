@@ -156,5 +156,15 @@ console.log("8. reasoning effort 大小写归一化");
   check("空白 → 空串（不指定）", profiles[3].reasoningEffort === "");
 }
 
+console.log("9. 理由字段传达「高级优先」原则");
+{
+  const cfg = mkCfg([ARCH, DEV, RES]);
+  const r = one(cfg, "简单检索任务"); // 复杂度缺省 medium
+  check("简单任务默认给最高档", r.assignments[0].profileId === "arch", r.assignments[0].profileId);
+  check("理由说明默认优先高级原则", r.assignments[0].reason.includes("默认优先高档") && r.assignments[0].reason.includes("可胜任"), r.assignments[0].reason);
+  const full = assignTasks({ config: cfg, allowed, load: { "ai4090/GLM-5.3-Flash": 1 }, tasks: [{ task_summary: "另一个任务" }] });
+  check("顺延理由说明上级已满", full.assignments[0].reason.includes("更高档已满"), full.assignments[0].reason);
+}
+
 console.log(`\n结果：${pass} 通过，${fail} 失败`);
 process.exit(fail > 0 ? 1 : 0);

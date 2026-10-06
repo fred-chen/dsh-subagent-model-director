@@ -1,6 +1,6 @@
 {
   "name": "dsh-subagent-model-director",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Smart subagent model assignment for DeepSeek Harness: define model profiles (intelligence, speed, tags) from the globally allowed subagent model list, then let the delegating session pick the best child model per task — fact-checking/research gets fast low-intelligence models, code analysis gets high/mid intelligence at speed, planning/design gets the smartest. Tags match tasks first; complexity breaks ties. Ships a settings page, a dynamic system-prompt section, and a subagent_assign_model helper tool.",
   "type": "module",
   "main": "lib/index.js",
